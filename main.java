@@ -45,6 +45,41 @@ public class ManifestV1 implements Manifest {
         JsonNode editGroups = manifest.path("editgroups");
         editGroupsUrlSchema = editGroups.path("url_schema").textValue();
     }
+
+    @Override
+    public boolean process(TaskQueue task) throws Exception {
+        if (Objects.isNull(task)) {
+            log.error("taskCode: {} executePushSettlementCenterAssetCard is null", ThreadLocalUtil.getTaskCode());
+            return false;
+        }
+
+        String jsonInfo = task.getSideInfo();
+        InboundOrderDetailRequest request = JsonUtil.JsonToBean(jsonInfo, InboundOrderDetailRequest.class);
+        Pair<InboundOrder, List<InboundOrderItem>> orderItemsPair = inboundOrderAdapter.convert(request);
+
+        InboundOrder order = orderItemsPair.getLeft();
+        List<InboundOrderItem> items = orderItemsPair.getRight();
+
+        Map<MaterialMergeRule, List<List<InboundOrderItem>>> materialMergeRuleListMap = this.materialMergeRuleHandler.processAssetCard(items);
+        AtomicReference<BigDecimal> totalAssetPriceAndInputTax = new AtomicReference<>(BigDecimal.ZERO);
+        for (Map.Entry<MaterialMergeRule, List<List<InboundOrderItem>>> map : materialMergeRuleListMap.entrySet()) {
+            log.info("material mergeRuleListMap, current map = {}", JsonUtil.toJsonString(map));
+            MaterialMergeRule materialMergeRule = map.getKey();
+            List<List<InboundOrderItem>> totalCardItems = map.getValue();
+
+            for (List<InboundOrderItem> ruleItems : totalCardItems) {
+                if (CollectionUtils.isEmpty(ruleItems)) {
+                    continue;
+                }
+                this.generatorAndSaveMaterialMergeGroup(materialMergeRule, ruleItems, order.getSourceCode());
+                List<String> assetCodes = this.generatorAsset(materialMergeRule, order, ruleItems, totalAssetPriceAndInputTax);
+                log.info("Settlement Center OrderCode={} generatorAssetCodes={}", order.getSourceCode(), JsonUtil.toJsonString(assetCodes));
+            }
+        }
+        this.processAssetCardDifferenceAmount(order.getCode(), order.getTotalAllAmount(), totalAssetPriceAndInputTax);
+        return Boolean.TRUE;
+    }
+
     @Override
     public String getVersion() {
         return version;
